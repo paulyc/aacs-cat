@@ -31,12 +31,14 @@ extern "C"
 #include "../contrib/install/include/gcrypt.h"
 
 #include <stdio.h>
+#include <errno.h>
+#include <unistd.h>
 #include <gcrypt.h>
 
-static void printhex(uint8_t *data, int len)
+static void fprinthex(FILE *f, uint8_t *data, int len)
 {
     for (int i = 0; i < len; ++i) {
-        printf("%02X", data[i]);
+        fprintf(f, "%02X", data[i]);
     }
 }
 
@@ -46,6 +48,9 @@ static void printhex(uint8_t *data, int len)
 int find_vuk(IN const char *mkb_filename, IN uint8_t *vid, IN struct pk_entry *pkl, IN size_t pkl_len, OUT uint8_t *mk, OUT uint8_t *vuk)
 {
     int ret = -1;
+    gcry_cipher_hd_t gcry_h;
+    uint8_t dec_vd[16];
+
     FILE *mkbfile = fopen(mkb_filename, "rb");
     if (mkbfile == NULL) {
         fprintf(stderr, "media key block file %s not found\n", mkb_filename);
@@ -67,15 +72,14 @@ int find_vuk(IN const char *mkb_filename, IN uint8_t *vid, IN struct pk_entry *p
     const uint8_t *vd      = mkb_mk_dv(mkb);
     unsigned num_uvs       = len / 5;
 
+    gcry_cipher_open(&gcry_h, GCRY_CIPHER_AES, GCRY_CIPHER_MODE_ECB, 0);
+
     for (size_t pki = 0; pki < pkl_len && ret != 0; ++pki) {
         const uint8_t *pk = pkl[pki].key;
         for (unsigned uvi = 0; uvi < num_uvs && ret != 0; uvi++) {
             const uint8_t *cvalue = cvalues + uvi * 16;
             const uint8_t *uv     = uvs + 1 + uvi * 5;
-            gcry_cipher_hd_t gcry_h;
-            uint8_t dec_vd[16];
 
-            gcry_cipher_open(&gcry_h, GCRY_CIPHER_AES, GCRY_CIPHER_MODE_ECB, 0);
             gcry_cipher_setkey(gcry_h, pk, 16);
             gcry_cipher_decrypt(gcry_h, mk, 16, cvalue, 16);
 
@@ -85,20 +89,20 @@ int find_vuk(IN const char *mkb_filename, IN uint8_t *vid, IN struct pk_entry *p
 
             gcry_cipher_setkey(gcry_h, mk, 16);
             gcry_cipher_decrypt (gcry_h, dec_vd, 16, vd, 16);
-            gcry_cipher_close(gcry_h);
 
             if (!memcmp(dec_vd, "\x01\x23\x45\x67\x89\xAB\xCD\xEF", 8)) {
-                printf("valid. mk is : ");
-                printhex(mk, 16);
-                printf("\n");
+                fprintf(stderr, "valid. mk is : ");
+                fprinthex(stderr, mk, 16);
+                fprintf(stderr, "\n");
                 crypto_aes128d(mk, vid, vuk);
                 ret = 0;
             } else {
-                //printf("invalid %d %d\n", uvi, num_uvs);
+                fprintf(stderr, "invalid %d %d\n", uvi, num_uvs);
             }
         }
     }
 
+    gcry_cipher_close(gcry_h);
     mkb_close(mkb);
 
     return ret;
@@ -118,27 +122,26 @@ int decrypt_unit_key(IN uint8_t *vuk, IN const uint8_t *encrypted_unit_key, OUT 
 struct aacs_aligned_unit
 {
     uint8_t seed[16];
-    uint8_t encrypted[6128];
+    uint8_t ciphertext[6128];
 } __attribute__((packed));
 
-int decrypt_m2ts(IN const char *encrypted_filename, IN const char *decrypted_filename, IN uint8_t *unit_key)
+int decrypt_m2ts(IN const char *encrypted_filename, IN const uint8_t *const unit_key)
 {
     int ret = 0;
+    uint8_t block_key[16];
+    gcry_cipher_hd_t gcry_h;
+    struct aacs_aligned_unit unit;
 
     FILE *encrypted_m2ts = fopen(encrypted_filename, "rb");
-    FILE *decrypted_m2ts = fopen(decrypted_filename, "wb");
     if (encrypted_m2ts == NULL) {
         fprintf(stderr, "error opening encrypted m2ts %s\n", encrypted_filename);
         return -1;
     }
-    if (decrypted_m2ts == NULL) {
-        fprintf(stderr, "error opening decrypted m2ts %s\n", decrypted_filename);
-        fclose(encrypted_m2ts);
-        return -1;
-    }
 
-    struct aacs_aligned_unit unit;
+    gcry_cipher_open(&gcry_h, GCRY_CIPHER_AES, GCRY_CIPHER_MODE_ECB, 0);
+
     while (!feof(encrypted_m2ts)) {
+        ssize_t wr;
         size_t rd = fread(&unit, sizeof(struct aacs_aligned_unit), 1, encrypted_m2ts);
         if (rd == 0 && ferror(encrypted_m2ts)) {
             fprintf(stderr, "error reading %s\n", encrypted_filename);
@@ -147,20 +150,30 @@ int decrypt_m2ts(IN const char *encrypted_filename, IN const char *decrypted_fil
         }
 
         // calculate block key from seed and unit key
-        uint8_t block_key[16];
-        gcry_cipher_hd_t gcry_h;
-        gcry_cipher_open(&gcry_h, GCRY_CIPHER_AES, GCRY_CIPHER_MODE_ECB, 0);
         gcry_cipher_setkey(gcry_h, unit_key, 16);
         gcry_cipher_decrypt(gcry_h, block_key, 16, unit.seed, 16);
-        gcry_cipher_close(gcry_h);
 
-        for (int i = 0; i < 16; ++i) {
+        for (int a = 0; a < 4; a++) {
+            block_key[a + 12] ^= unit.seed[a];
+        }
+
+        // decrypt unit
+        gcry_cipher_setkey(gcry_h, block_key, 16);
+        gcry_cipher_decrypt(gcry_h, unit.ciphertext, sizeof(unit.ciphertext), NULL, 0);
+
+        // write to output
+        wr = write(STDOUT_FILENO, unit.ciphertext, sizeof(unit.ciphertext));
+        if (wr == -1) {
+            ret = errno;
+            fprintf(stderr, "error writing: [%d] %s\n", ret, strerror(ret));
+            break;
         }
     }
 
+    gcry_cipher_close(gcry_h);
     fclose(encrypted_m2ts);
-    fclose(decrypted_m2ts);
-    return 0;
+
+    return ret;
 }
 
 int main(int argc, char **argv)
@@ -170,14 +183,22 @@ int main(int argc, char **argv)
     uint8_t mk[16];
     uint8_t vuk[16];
 
-    if (find_vuk("./MKB_RO.inf", vid, pkl, sizeof(pkl), mk, vuk) != 0) {
-        fprintf(stderr, "could not find vuk\n");
+    if (argc < 2) {
+        fprintf(stderr, "Usage: %s <encrypted_m2ts>\n", argv[0]);
         return -1;
     }
 
-    printf("vuk is : ");
-    printhex(vuk, 16);
-    printf("\n");
+    const int unit_key_indx = 0;
+
+    int ret = find_vuk("./MKB_RO.inf", vid, pkl, sizeof(pkl), mk, vuk);
+    if (ret != 0) {
+        fprintf(stderr, "could not find vuk: error %d\n", ret);
+        return ret;
+    }
+
+    fprintf(stderr, "vuk is : ");
+    fprinthex(stderr, vuk, 16);
+    fprintf(stderr, "\n");
 
     const char *encrypted_unit_keys[] = {
         "\x0f\x19\xc2\xfd\x1e\xb4\x56\xbd\x6d\x0c\x74\xae\xa8\xe7\xc2\x36",
@@ -189,9 +210,15 @@ int main(int argc, char **argv)
     for (int i = 0; i < 3; ++i) {
         decrypt_unit_key(vuk, (const uint8_t*)encrypted_unit_keys[i], decrypted_unit_keys[i]);
 
-        printf("decrypted unit key %d : ", i);
-        printhex(decrypted_unit_keys[i], 16);
-        printf("\n");
+        fprintf(stderr, "decrypted unit key %d : ", i);
+        fprinthex(stderr, decrypted_unit_keys[i], 16);
+        fprintf(stderr, "\n");
+    }
+
+    ret = decrypt_m2ts(argv[1], decrypted_unit_keys[unit_key_indx]);
+    if (ret != 0) {
+        fprintf(stderr, "decrypt_m2ts() failed: error %d\n", ret);
+        return ret;
     }
 
     return 0;
