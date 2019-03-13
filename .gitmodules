@@ -1,0 +1,9 @@
+[submodule "contrib/libgcrypt"]
+	path = contrib/libgcrypt
+	url = https://github.com/gpg/libgcrypt.git
+[submodule "contrib/libgpg-error"]
+	path = contrib/libgpg-error
+	url = https://github.com/gpg/libgpg-error.git
+[submodule "contrib/libaacs"]
+	path = contrib/libaacs
+	url = https://code.videolan.org/videolan/libaacs.git
