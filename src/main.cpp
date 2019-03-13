@@ -23,9 +23,9 @@
 
 extern "C"
 {
-#include <libaacs/mkb.h>
-#include <libaacs/crypto.h>
-#include <file/keydbcfg.h>
+#include "../contrib/libaacs/src/libaacs/mkb.h"
+#include "../contrib/libaacs/src/libaacs/crypto.h"
+#include "../contrib/libaacs/src/file/keydbcfg.h"
 }
 
 #include <stdio.h>
