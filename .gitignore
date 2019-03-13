@@ -39,3 +39,5 @@ build
 xcodebuild
 
 contrib
+
+aacs-find-vuk

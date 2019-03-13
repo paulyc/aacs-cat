@@ -28,70 +28,94 @@ extern "C"
 #include "../contrib/libaacs/src/file/keydbcfg.h"
 }
 
+#include "../contrib/install/include/gcrypt.h"
+
 #include <stdio.h>
 #include <gcrypt.h>
 
-void printhex(uint8_t *data, int len)
+static void printhex(uint8_t *data, int len)
 {
     for (int i = 0; i < len; ++i) {
         printf("%02X", data[i]);
     }
 }
 
-int main(int argc, char **argv)
+#define IN
+#define OUT
+
+int find_vuk(IN const char *mkb_filename, IN uint8_t *vid, IN struct pk_entry *pkl, IN size_t pkl_len, OUT uint8_t *mk, OUT uint8_t *vuk)
 {
-    FILE *mkbfile = fopen("./MKB_RO.inf", "rb");
+    int ret = -1;
+    FILE *mkbfile = fopen(mkb_filename, "rb");
+    if (mkbfile == NULL) {
+        fprintf(stderr, "media key block file %s not found\n", mkb_filename);
+        return ret;
+    }
+
     fseek(mkbfile, 0, SEEK_END);
     long flen = ftell(mkbfile);
     fseek(mkbfile, 0, SEEK_SET);
     uint8_t *data = (uint8_t*)malloc(flen);
     fread(data, 1, flen, mkbfile);
+    fclose(mkbfile);
+
     MKB *mkb = mkb_init(data, flen);
 
     size_t len;
-    uint8_t mk[16];
-    uint8_t vuk[16];
-    uint8_t vid[16] = {0xD7,0x18,0xB7,0x15,0xB7,0xF3,0x12,0x0B,0xF4,0x46,0x45,0x0D,0xB4,0x2C,0x34,0x2F};
     const uint8_t *uvs     = mkb_subdiff_records(mkb, &len);
     const uint8_t *cvalues = mkb_cvalues(mkb, &len);
     const uint8_t *vd      = mkb_mk_dv(mkb);
-    unsigned num_uvs = len / 5;
+    unsigned num_uvs       = len / 5;
 
-    struct pk_entry pkl[1] = {{{0xAD,0x5E,0x54,0x6C,0x46,0xD7,0x2D,0xC0,0x83,0xAE,0xB5,0x68,0x69,0x24,0xE1,0xB3},NULL}};
-    const uint8_t *pk = pkl[0].key;
-    for (unsigned uvi = 0; uvi < num_uvs; uvi++) {
-        const uint8_t *cvalue = cvalues + uvi * 16;
-        const uint8_t *uv     = uvs + 1 + uvi * 5;
-        gcry_cipher_hd_t gcry_h;
-        uint8_t dec_vd[16];
+    for (size_t pki = 0; pki < pkl_len && ret != 0; ++pki) {
+        const uint8_t *pk = pkl[pki].key;
+        for (unsigned uvi = 0; uvi < num_uvs && ret != 0; uvi++) {
+            const uint8_t *cvalue = cvalues + uvi * 16;
+            const uint8_t *uv     = uvs + 1 + uvi * 5;
+            gcry_cipher_hd_t gcry_h;
+            uint8_t dec_vd[16];
 
-        gcry_cipher_open(&gcry_h, GCRY_CIPHER_AES, GCRY_CIPHER_MODE_ECB, 0);
-        gcry_cipher_setkey(gcry_h, pk, 16);
-        gcry_cipher_decrypt(gcry_h, mk, 16, cvalue, 16);
+            gcry_cipher_open(&gcry_h, GCRY_CIPHER_AES, GCRY_CIPHER_MODE_ECB, 0);
+            gcry_cipher_setkey(gcry_h, pk, 16);
+            gcry_cipher_decrypt(gcry_h, mk, 16, cvalue, 16);
 
-        for (int a = 0; a < 4; a++) {
-            mk[a + 12] ^= uv[a];
-        }
+            for (int a = 0; a < 4; a++) {
+                mk[a + 12] ^= uv[a];
+            }
 
-        gcry_cipher_setkey(gcry_h, mk, 16);
-        gcry_cipher_decrypt (gcry_h, dec_vd, 16, vd, 16);
-        gcry_cipher_close(gcry_h);
+            gcry_cipher_setkey(gcry_h, mk, 16);
+            gcry_cipher_decrypt (gcry_h, dec_vd, 16, vd, 16);
+            gcry_cipher_close(gcry_h);
 
-        if (!memcmp(dec_vd, "\x01\x23\x45\x67\x89\xAB\xCD\xEF", 8)) {
-            printf("valid. mk is : ");
-            printhex(mk, 16);
-            printf("\n");
-            crypto_aes128d(mk, vid, vuk);
-            printf("vuk is : ");
-            printhex(vuk, 16);
-            printf("\n");
-            break;
-        } else {
-            printf("invalid %d %d\n", uvi, num_uvs);
+            if (!memcmp(dec_vd, "\x01\x23\x45\x67\x89\xAB\xCD\xEF", 8)) {
+                printf("valid. mk is : ");
+                printhex(mk, 16);
+                printf("\n");
+                crypto_aes128d(mk, vid, vuk);
+                ret = 0;
+            } else {
+                //printf("invalid %d %d\n", uvi, num_uvs);
+            }
         }
     }
 
     mkb_close(mkb);
-    fclose(mkbfile);
+
+    return ret;
+}
+
+int main(int argc, char **argv)
+{
+    struct pk_entry pkl[1] = {{{0xAD,0x5E,0x54,0x6C,0x46,0xD7,0x2D,0xC0,0x83,0xAE,0xB5,0x68,0x69,0x24,0xE1,0xB3},NULL}};
+    uint8_t vid[16] = {0xD7,0x18,0xB7,0x15,0xB7,0xF3,0x12,0x0B,0xF4,0x46,0x45,0x0D,0xB4,0x2C,0x34,0x2F};
+    uint8_t mk[16];
+    uint8_t vuk[16];
+
+    if (find_vuk("./MKB_RO.inf", vid, pkl, sizeof(pkl), mk, vuk) == 0) {
+        printf("vuk is : ");
+        printhex(vuk, 16);
+        printf("\n");
+    }
+
     return 0;
 }
