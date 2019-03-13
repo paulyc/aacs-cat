@@ -19,11 +19,11 @@
 #    License along with this library; if not, write to the Free Software
 #    Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
 
-all: aacs-find-vuk
+all: aacs-cat
 
 clean:
 	rm -f src/*.o
-	rm -f aacs-find-vuk
+	rm -f aacs-cat
 
 distclean: clean
 	rm -rf contrib/install
@@ -31,7 +31,7 @@ distclean: clean
 src/%.o: src/%.cpp contrib
 	g++ -g -c -Icontrib/libaacs/src -Icontrib/install/include $< -o $@
 
-aacs-find-vuk: src/main.o contrib/install/lib/libaacs.a contrib/install/lib/libgcrypt.a contrib/install/lib/libgpg-error.a
+aacs-cat: src/main.o contrib/install/lib/libaacs.a contrib/install/lib/libgcrypt.a contrib/install/lib/libgpg-error.a
 	g++ -Wl,-rpath -Wl,contrib/install/lib -o $@ $^
 
 contrib: contrib/install/lib/libgpg-error.a contrib/install/lib/libgcrypt.a contrib/install/lib/libaacs.a
