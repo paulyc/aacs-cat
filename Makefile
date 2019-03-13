@@ -22,9 +22,11 @@
 all: aacs-find-vuk
 
 clean:
-	rm -rf contrib/install
 	rm -f src/*.o
 	rm -f aacs-find-vuk
+
+distclean: clean
+	rm -rf contrib/install
 
 src/%.o: src/%.cpp contrib
 	g++ -g -c -Icontrib/libaacs/src -Icontrib/install/include $< -o $@
