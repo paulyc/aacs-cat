@@ -94,7 +94,11 @@ int find_vuk(IN const char *mkb_filename, IN uint8_t *vid, IN struct pk_entry *p
                 fprintf(stderr, "valid. mk is : ");
                 fprinthex(stderr, mk, 16);
                 fprintf(stderr, "\n");
+
                 crypto_aes128d(mk, vid, vuk);
+                for (int a = 0; a < 16; ++a) {
+                    vuk[a] ^= vid[a];
+                }
                 ret = 0;
             } else {
                 fprintf(stderr, "invalid %d %d\n", uvi, num_uvs);
@@ -129,8 +133,10 @@ int decrypt_m2ts(IN const char *encrypted_filename, IN const uint8_t *const unit
 {
     int ret = 0;
     uint8_t block_key[16];
-    gcry_cipher_hd_t gcry_h;
+    uint8_t plaintext[6128];
+    gcry_cipher_hd_t gcry_ecb_h, gcry_cbc_h;
     struct aacs_aligned_unit unit;
+    const char *iv = "\x0b\xa0\xf8\xdd\xfe\xa6\x1f\xb3\xd8\xdf\x9f\x56\x6a\x05\x0f\x78";
 
     FILE *encrypted_m2ts = fopen(encrypted_filename, "rb");
     if (encrypted_m2ts == NULL) {
@@ -138,7 +144,7 @@ int decrypt_m2ts(IN const char *encrypted_filename, IN const uint8_t *const unit
         return -1;
     }
 
-    gcry_cipher_open(&gcry_h, GCRY_CIPHER_AES, GCRY_CIPHER_MODE_ECB, 0);
+    gcry_cipher_open(&gcry_ecb_h, GCRY_CIPHER_AES, GCRY_CIPHER_MODE_ECB, 0);
 
     while (!feof(encrypted_m2ts)) {
         ssize_t wr;
@@ -150,19 +156,22 @@ int decrypt_m2ts(IN const char *encrypted_filename, IN const uint8_t *const unit
         }
 
         // calculate block key from seed and unit key
-        gcry_cipher_setkey(gcry_h, unit_key, 16);
-        gcry_cipher_decrypt(gcry_h, block_key, 16, unit.seed, 16);
+        gcry_cipher_setkey(gcry_ecb_h, unit_key, 16);
+        gcry_cipher_encrypt(gcry_ecb_h, block_key, 16, unit.seed, 16);
 
-        for (int a = 0; a < 4; a++) {
-            block_key[a + 12] ^= unit.seed[a];
+        for (int a = 0; a < 16; ++a) {
+            block_key[a] ^= unit.seed[a];
         }
 
         // decrypt unit
-        gcry_cipher_setkey(gcry_h, block_key, 16);
-        gcry_cipher_decrypt(gcry_h, unit.ciphertext, sizeof(unit.ciphertext), NULL, 0);
+        gcry_cipher_open(&gcry_cbc_h, GCRY_CIPHER_AES, GCRY_CIPHER_MODE_CBC, 0);
+        gcry_cipher_setiv(gcry_cbc_h, iv, 16);
+        gcry_cipher_setkey(gcry_cbc_h, block_key, 16);
+        gcry_cipher_decrypt(gcry_cbc_h, plaintext, sizeof(plaintext), unit.ciphertext, sizeof(unit.ciphertext));
+        gcry_cipher_close(gcry_cbc_h);
 
         // write to output
-        wr = write(STDOUT_FILENO, unit.ciphertext, sizeof(unit.ciphertext));
+        wr = write(STDOUT_FILENO, plaintext, sizeof(plaintext));
         if (wr == -1) {
             ret = errno;
             fprintf(stderr, "error writing: [%d] %s\n", ret, strerror(ret));
@@ -170,7 +179,7 @@ int decrypt_m2ts(IN const char *encrypted_filename, IN const uint8_t *const unit
         }
     }
 
-    gcry_cipher_close(gcry_h);
+    gcry_cipher_close(gcry_ecb_h);
     fclose(encrypted_m2ts);
 
     return ret;
