@@ -133,7 +133,6 @@ int decrypt_m2ts(IN const char *encrypted_filename, IN const uint8_t *const unit
 {
     int ret = 0;
     uint8_t block_key[16];
-    uint8_t plaintext[6128];
     gcry_cipher_hd_t gcry_ecb_h, gcry_cbc_h;
     struct aacs_aligned_unit unit;
     const char *iv = "\x0b\xa0\xf8\xdd\xfe\xa6\x1f\xb3\xd8\xdf\x9f\x56\x6a\x05\x0f\x78";
@@ -167,11 +166,11 @@ int decrypt_m2ts(IN const char *encrypted_filename, IN const uint8_t *const unit
         gcry_cipher_open(&gcry_cbc_h, GCRY_CIPHER_AES, GCRY_CIPHER_MODE_CBC, 0);
         gcry_cipher_setiv(gcry_cbc_h, iv, 16);
         gcry_cipher_setkey(gcry_cbc_h, block_key, 16);
-        gcry_cipher_decrypt(gcry_cbc_h, plaintext, sizeof(plaintext), unit.ciphertext, sizeof(unit.ciphertext));
+        gcry_cipher_decrypt(gcry_cbc_h, unit.ciphertext, sizeof(unit.ciphertext), NULL, 0);
         gcry_cipher_close(gcry_cbc_h);
 
-        // write to output
-        wr = write(STDOUT_FILENO, plaintext, sizeof(plaintext));
+        // write whole unit to output. first 16 bytes (seed) are unencrypted.
+        wr = write(STDOUT_FILENO, (char*)&unit, sizeof(aacs_aligned_unit));
         if (wr == -1) {
             ret = errno;
             fprintf(stderr, "error writing: [%d] %s\n", ret, strerror(ret));
