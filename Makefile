@@ -49,7 +49,8 @@ contrib/install/lib/libgcrypt.a: contrib/install/lib/libgpg-error.a
 	make install
 
 contrib/install/lib/libaacs.a: contrib/install/lib/libgcrypt.a
+	contrib/check_yacc.sh
 	cd contrib/libaacs && \
 	./bootstrap && \
-	./configure --prefix=$(PWD)/contrib/install && \
+	./configure --prefix=$(PWD)/contrib/install --with-libgcrypt-prefix=$(PWD)/contrib/install && \
 	make install
